@@ -263,7 +263,7 @@ body.dark[class*="ev-"] .sidebar{background:#070b17}
    }}
    Leave it empty ("") to run exactly like the normal device-only version.
    ============================================================ */
-const GLOBAL_DB="";
+const GLOBAL_DB="https://gradeo-97e5c-default-rtdb.europe-west1.firebasedatabase.app";
 let GLB={rows:null,err:"",loading:false},GCTL={},GADM={},lbTab="global",gTimer=null,siteWrote=0;
 const gUrl=p=>GLOBAL_DB.replace(/\/+$/,"")+p+".json";
 const gRowOk=id=>/^[A-Za-z0-9_-]{1,40}$/.test(String(id));
