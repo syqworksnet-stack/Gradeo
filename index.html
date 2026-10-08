@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Gradeo — GCSE Study</title>
+<title>Gradeo — GCSE Study (Global)</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='32' fill='%23ff7a1a'/%3E%3Ctext x='32' y='33' text-anchor='middle' dominant-baseline='central' font-family='Arial Black,Arial,sans-serif' font-weight='900' font-size='40' fill='%230f1b3d'%3EG%3C/text%3E%3C/svg%3E">
 <meta name="theme-color" content="#0f1b3d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -207,6 +207,7 @@ body[class*="ev-"] .sidebar{background:var(--side,#0f1b3d)}
 body.ev-christmas{--side:#4a0f12}body.ev-halloween{--side:#1b0d2a}body.ev-summer{--side:#01579b}
 body.ev-easter{--side:#4a3a7a}body.ev-valentine{--side:#5a1030}body.ev-newyear{--side:#0a0e33}body.ev-exams{--side:#0a2a5e}
 body.dark[class*="ev-"] .sidebar{background:#070b17}
+.av svg,.avs svg,.avopt svg{width:80%;height:80%;display:block}
 </style>
 </head>
 <body>
@@ -248,6 +249,123 @@ body.dark[class*="ev-"] .sidebar{background:#070b17}
 </div>
 
 <script>
+/* ============================================================
+   GLOBAL MODE (Firebase Realtime Database over plain fetch)
+   Paste your database URL below. Example:
+     const GLOBAL_DB="https://my-gradeo-default-rtdb.firebaseio.com";
+   Setup: console.firebase.google.com > Create project > Build >
+   Realtime Database > Create database > Rules tab > paste this > Publish:
+   {"rules":{
+     "scores":{".read":true,"$id":{".write":true,".validate":"newData.hasChildren(['n','xp']) && newData.child('n').isString() && newData.child('n').val().length <= 20 && newData.child('xp').isNumber() && newData.child('xp').val() >= 0 && newData.child('xp').val() < 10000000"}},
+     "site":{".read":true,".write":true},
+     "ctl":{".read":true,".write":true},
+     "admins":{".read":true,".write":true}
+   }}
+   Leave it empty ("") to run exactly like the normal device-only version.
+   ============================================================ */
+const GLOBAL_DB="";
+let GLB={rows:null,err:"",loading:false},GCTL={},GADM={},lbTab="global",gTimer=null,siteWrote=0;
+const gUrl=p=>GLOBAL_DB.replace(/\/+$/,"")+p+".json";
+const gRowOk=id=>/^[A-Za-z0-9_-]{1,40}$/.test(String(id));
+async function gGet(p){const r=await fetch(gUrl(p),{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);return await r.json()}
+function gSend(method,p,body){if(!GLOBAL_DB)return Promise.resolve();return fetch(gUrl(p),{method:method,headers:{"Content-Type":"application/json"},body:body===undefined?undefined:JSON.stringify(body)}).catch(()=>{})}
+function gId(k){
+  k=k||currentUser;const users=getUsers(),u=users[k];if(!u)return"";
+  if(!u.gid){u.gid="g"+Math.random().toString(36).slice(2,9)+Date.now().toString(36);setUsers(users)}
+  return u.gid;
+}
+function canon(o){return JSON.stringify(o,(k,v)=>v&&typeof v==="object"&&!Array.isArray(v)?Object.keys(v).sort().reduce((r,x)=>(r[x]=v[x],r),{}):v)}
+function pushGlobal(now){
+  if(!GLOBAL_DB||!currentUser)return Promise.resolve();
+  clearTimeout(gTimer);
+  const run=()=>{
+    const u=getUsers()[currentUser];if(!u||u.banned||typeof state==="undefined"||!state)return Promise.resolve();
+    const a=(u.ava&&typeof u.ava==="object")?u.ava:{};
+    return gSend("PUT","/scores/"+gId(),{n:String(u.name||currentUser).slice(0,20),xp:Math.max(0,state.xp|0),q:Math.max(0,state.quizzes|0),e:a.e||"",c:a.c||"#ff7a1a"});
+  };
+  if(now)return run();
+  gTimer=setTimeout(run,1500);return Promise.resolve();
+}
+async function loadGlobal(){
+  if(!GLOBAL_DB||GLB.loading)return;
+  GLB.loading=true;GLB.err="";if(view==="leaderboard"||view==="admin")render();
+  try{
+    const [s,c,a]=await Promise.all([gGet("/scores"),gGet("/ctl").catch(()=>null),gGet("/admins").catch(()=>null)]);
+    GCTL=(c&&typeof c==="object")?c:{};GADM=(a&&typeof a==="object")?a:{};refreshAdminNav();
+    const d=(s&&typeof s==="object")?s:{};
+    GLB.rows=Object.keys(d).filter(gRowOk).map(id=>{const x=d[id]||{},e=(ANIMALS.includes(x.e)||x.e==="crow")?x.e:"",col=/^#[0-9a-f]{6}$/i.test(x.c)?x.c:"#ff7a1a";return{id:id,u:{name:String(x.n||"Student").slice(0,20),ava:{e:e,c:col}},xp:Math.max(0,Number(x.xp)||0),quizzes:Math.max(0,Number(x.q)||0)}}).sort((p,q)=>q.xp-p.xp||p.u.name.localeCompare(q.u.name));
+  }catch(e){GLB.err="Couldn't reach the global leaderboard. Check your internet and try again."}
+  GLB.loading=false;
+  if(view==="leaderboard"||(view==="admin"&&!(document.activeElement&&/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))))render();
+}
+function refreshBoard(){pushGlobal(true).then(loadGlobal)}
+function refreshAdminNav(){const nb=document.getElementById("navAdmin");if(nb&&currentUser)nb.classList.toggle("hidden",!isAdmin())}
+
+/* site settings: announcements, themes, XP boost, countdown, question of the day */
+async function syncSite(){
+  if(!GLOBAL_DB||Date.now()-siteWrote<8000)return;
+  try{
+    const d=await gGet("/site"),o=(d&&typeof d==="object")?d:{};
+    if(canon(o)!==canon(site())){
+      const before=evKey();save("gradeo_site",JSON.stringify(o));applyEvent();updateBanner();if(evKey()!==before)burstFX();
+      if(view==="admin"&&!(document.activeElement&&/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)))render();
+    }
+    applyGall();
+  }catch(e){}
+}
+function applyGall(){
+  if(!currentUser||typeof state==="undefined"||!state)return;
+  const g=site().gall;if(!g||!g.id||store("gradeo_gall","")===String(g.id))return;
+  save("gradeo_gall",String(g.id));
+  if(Date.now()-(Number(g.t)||0)>3*864e5)return;
+  const n=Math.round(Number(g.n))||0;if(!n)return;
+  state.xp=Math.max(0,state.xp+n);persist();toast("🎁 An admin gave everyone "+n+" XP!");burstFX();
+}
+
+/* commands aimed at this player: XP gifts, resets, bans, admin status */
+async function pollMine(){
+  if(!GLOBAL_DB||!currentUser)return;
+  const who=currentUser;
+  try{
+    const id=gId(who),[c,a]=await Promise.all([gGet("/ctl/"+id).catch(()=>null),gGet("/admins").catch(()=>null)]);
+    if(currentUser!==who)return;
+    if(a&&typeof a==="object"){GADM=a;refreshAdminNav()}
+    if(c&&typeof c==="object")applyCtl(c);
+  }catch(e){}
+}
+function applyCtl(c){
+  if(!currentUser||currentUser===ADMIN_USER)return;
+  if(c.ban===true){
+    const users=getUsers();if(users[currentUser]){users[currentUser].banned=true;users[currentUser].admin=false;setUsers(users)}
+    logout();setTimeout(()=>{try{amsg("This account has been banned by the creator.")}catch(e){}},50);return;
+  }
+  if(c.ban===false){const users=getUsers();if(users[currentUser]&&users[currentUser].banned){users[currentUser].banned=false;setUsers(users)}}
+  if(c.reset&&store("gradeo_ctl_reset","")!==String(c.reset)){
+    const gm=store("gradeo_gall","");
+    try{userKeys(currentUser).forEach(x=>localStorage.removeItem(x))}catch(e){}
+    save("gradeo_ctl_reset",String(c.reset));if(gm)save("gradeo_gall",gm);
+    if(c.gift&&c.gift.id)save("gradeo_ctl_gift",String(c.gift.id));
+    loadState();toast("An admin reset your progress.");pushGlobal();go("home");return;
+  }
+  if(c.gift&&c.gift.id&&store("gradeo_ctl_gift","")!==String(c.gift.id)){
+    const n=Math.round(Number(c.gift.n))||0;save("gradeo_ctl_gift",String(c.gift.id));
+    if(n){state.xp=Math.max(0,state.xp+n);persist();toast(n>0?"🎁 An admin gave you "+n+" XP!":"An admin removed "+Math.abs(n)+" XP.");if(n>0)burstFX()}
+    render();
+  }
+}
+async function stillBanned(k,u){
+  if(!GLOBAL_DB||!u.gid)return true;
+  try{
+    const c=await gGet("/ctl/"+u.gid);
+    if(c&&c.ban===true)return true;
+    const users=getUsers();if(users[k]){users[k].banned=false;setUsers(users)}
+    return false;
+  }catch(e){return true}
+}
+function pollAll(){syncSite();pollMine()}
+setInterval(()=>{if(!currentUser)return;pollAll();if(view==="leaderboard"&&!GLB.loading)loadGlobal()},30000);
+window.addEventListener("focus",()=>{if(currentUser)pollAll()});
+
 /* ===== HELPERS ===== */
 function store(k,d){try{const v=localStorage.getItem(pfx(k));return v===null?d:v}catch(e){return d}}
 function save(k,v){try{localStorage.setItem(pfx(k),v)}catch(e){toast("Couldn't save. Your browser storage may be full or blocked.")}}
@@ -387,7 +505,7 @@ async function doLogin(){
     if(lockLeft(key))return amsg(lockMsg(key));
     return amsg("Wrong username or password. "+(MAX_FAILS-l.n)+" "+((MAX_FAILS-l.n)===1?"try":"tries")+" left before a 24 hour lock.");
   }
-  if(u.banned&&key!==ADMIN_USER)return amsg("This account has been banned by the creator.");
+  if(u.banned&&key!==ADMIN_USER&&await stillBanned(key,u))return amsg("This account has been banned by the creator.");
   const rem=document.getElementById("aRem").checked;
   if(key===ADMIN_USER){pendingAdmin={key:key,rem:rem};return showAuth("admincheck")}
   clearFails(key);
@@ -445,6 +563,7 @@ function login(key){
   authBox.innerHTML="";
   updateAvatars();
   go("home");
+  pushGlobal();pollAll();
 }
 function logout(){
   save("gradeo_session","");
@@ -456,7 +575,7 @@ function logout(){
 function me(){return getUsers()[currentUser]||{name:"",avatar:""}}
 function avatarInner(){
   const u=me(),a=(u.ava&&typeof u.ava==="object")?u.ava:{};
-  return a.e?a.e:escapeHTML((u.name||"?").charAt(0).toUpperCase());
+  return a.e==="crow"?CROW_SVG:a.e?a.e:escapeHTML((u.name||"?").charAt(0).toUpperCase());
 }
 function updateAvatars(){
   const t=document.getElementById("avatarTop");if(!t)return;
@@ -480,6 +599,7 @@ function loadState(){state={
   path:(()=>{try{const v=JSON.parse(store("gradeo_path","{}"));return v&&typeof v==="object"?v:{}}catch(e){return{}}})()
 };}
 function persist(){
+  pushGlobal();
   save("gradeo_xp",state.xp);save("gradeo_streak",state.streak);save("gradeo_lastday",state.lastDay);
   save("gradeo_quizzes",state.quizzes);save("gradeo_perfect",state.perfect);
   save("gradeo_sessions",state.sessions);save("gradeo_plan",state.plan);save("gradeo_weak",JSON.stringify(state.weak||{}));save("gradeo_tasks",JSON.stringify(state.tasks||[]));save("gradeo_secs",JSON.stringify(state.secs||[]));save("gradeo_cards",JSON.stringify(state.cards||[]));save("gradeo_miss",JSON.stringify(state.miss||[]));save("gradeo_diff",state.diff||"normal");save("gradeo_ctopics",JSON.stringify(state.ctopics||{}));save("gradeo_path",JSON.stringify(state.path||{}));
@@ -1017,7 +1137,7 @@ function lbData(){
     return{k:k,u:users[k],mine:mine,xp:mine?state.xp:lsNum(pre+"gradeo_xp"),quizzes:mine?state.quizzes:lsNum(pre+"gradeo_quizzes")};
   }).sort((a,b)=>b.xp-a.xp||String(a.u.name).localeCompare(String(b.u.name)));
 }
-function leaderboardHTML(){
+function localLeaderboardHTML(){
   const rows=lbData(),medal=["🥇","🥈","🥉"];
   let h=`<div class="card"><h3>Leaderboard</h3><p class="small">Ranked by XP. It shows everyone with an account on this device.</p>`;
   h+=rows.slice(0,20).map((r,i)=>`<div class="lbrow ${r.mine?"me":""}"><div class="rank">${medal[i]||i+1}</div>${avSpan(r.u,"avs")}<div class="tmain"><div class="ttl">${escapeHTML(r.u.name||r.k)}${r.mine?" (you)":""}</div><div class="small">Level ${Math.floor(r.xp/100)+1} · ${r.quizzes} quiz${r.quizzes===1?"":"zes"}</div></div><div class="lbxp">${r.xp} XP</div></div>`).join("");
@@ -1026,14 +1146,34 @@ function leaderboardHTML(){
   return h;
 }
 
+function gRowHTML(r,i,mine){const medal=["🥇","🥈","🥉"];return `<div class="lbrow ${mine?"me":""}"><div class="rank">${medal[i]||i+1}</div>${avSpan(r.u,"avs")}<div class="tmain"><div class="ttl">${escapeHTML(r.u.name)}${mine?" (you)":""}</div><div class="small">Level ${Math.floor(r.xp/100)+1} · ${r.quizzes} quiz${r.quizzes===1?"":"zes"}</div></div><div class="lbxp">${r.xp} XP</div></div>`}
+function leaderboardHTML(){
+  const tabs=`<div class="row" style="margin-bottom:10px"><button class="btn ${lbTab==="global"?"":"secondary"} sm" onclick="lbTab='global';render()">🌍 Global</button><button class="btn ${lbTab==="local"?"":"secondary"} sm" onclick="lbTab='local';render()">📱 This device</button></div>`;
+  if(lbTab==="local")return tabs+localLeaderboardHTML();
+  if(!GLOBAL_DB)return tabs+`<div class="card"><h3>🌍 Global leaderboard</h3><p>Not switched on yet. The creator needs to paste a Firebase database URL into <b>GLOBAL_DB</b> at the top of the code.</p></div>`+localLeaderboardHTML();
+  const me=gId(),rows=(GLB.rows||[]).filter(r=>!(GCTL[r.id]&&GCTL[r.id].ban===true));
+  let h=tabs+`<div class="card"><h3>🌍 Global leaderboard</h3><p class="small">Everyone who plays Gradeo, ranked by XP. Your display name and XP are visible to everyone, so use a nickname. Your score updates a few seconds after you earn XP.</p><div class="row"><button class="btn secondary sm" onclick="refreshBoard()">↻ Refresh</button></div>`;
+  if(GLB.loading&&!GLB.rows)h+=`<p>Loading…</p>`;
+  else if(GLB.err&&!GLB.rows)h+=`<p>${escapeHTML(GLB.err)}</p>`;
+  else{
+    if(GLB.err)h+=`<p class="small">${escapeHTML(GLB.err)}</p>`;
+    h+=rows.slice(0,50).map((r,i)=>gRowHTML(r,i,r.id===me)).join("");
+    const mi=rows.findIndex(r=>r.id===me);
+    if(mi>=50)h+=`<div class="small" style="text-align:center;padding:6px">· · ·</div>`+gRowHTML(rows[mi],mi,true);
+    if(!rows.length)h+=`<p>Nobody is on the board yet. Earn some XP to be first!</p>`;
+  }
+  return h+`</div>`;
+}
+
 /* ===== PROFILE PICTURES (animals + colours) ===== */
+const CROW_SVG='<svg viewBox="0 0 64 64" aria-label="Crow"><path d="M14 40c2-12 12-20 24-20 6 0 10 3 12 7l8 3-8 3c-1 10-9 18-20 18-9 0-15-5-16-11z" fill="#14142b"/><path d="M10 38c-4 1-7 4-8 8 5-1 9-2 13-5z" fill="#14142b"/><path d="M24 36c6-6 14-6 20-1-5 8-14 10-20 1z" fill="#2c2c5e"/><path d="M50 27l11 3-11 3z" fill="#ffb300"/><circle cx="45" cy="26" r="2.6" fill="#fff"/><circle cx="45.8" cy="26" r="1.2" fill="#14142b"/></svg>';
 const ANIMALS=["🐶","🐱","🦊","🐼","🦁","🐸","🐵","🦄","🐙","🦉","🐧","🐢","🐰","🐯","🐨","🦋"];
 const AV_COLOURS=["#ff7a1a","#2b50ff","#17c3a0","#ff5c8a","#ffd23f","#8b5cf6","#ef4444","#38bdf8","#84cc16","#94a3b8"];
 function lum(h){const n=parseInt(h.slice(1),16);return .299*(n>>16)+.587*((n>>8)&255)+.114*(n&255)}
 function avStyle(c){return `background:${c};color:${lum(c)>150?"#0f1b3d":"#fff"}`}
 function avSpan(u,cls){
   const a=(u&&u.ava&&typeof u.ava==="object")?u.ava:{},c=a.c||"#ff7a1a";
-  return `<span class="${cls||"avs"}" style="${avStyle(c)}">${a.e?a.e:escapeHTML(((u&&u.name)||"?").charAt(0).toUpperCase())}</span>`;
+  return `<span class="${cls||"avs"}" style="${avStyle(c)}">${a.e==="crow"?CROW_SVG:a.e?a.e:escapeHTML(((u&&u.name)||"?").charAt(0).toUpperCase())}</span>`;
 }
 function setAva(e,c){
   const users=getUsers(),u=users[currentUser];if(!u)return;
@@ -1046,7 +1186,7 @@ function avatarPicker(){
   return `<div class="card"><h3>Profile picture</h3>
   <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">${avSpan(u,"avs big")}<div class="small">Pick an animal and a colour. It shows next to your name on the leaderboard.</div></div>
   <p class="small" style="margin:0 0 6px"><b>Animal</b></p>
-  <div class="avgrid">${ANIMALS.map(e=>`<button class="avopt ${cur.e===e?"on":""}" aria-label="Animal ${e}" onclick="setAva('${e}',null)">${e}</button>`).join("")}<button class="avopt txt ${!cur.e?"on":""}" aria-label="Use my first letter" onclick="setAva('',null)">Aa</button></div>
+  <div class="avgrid">${ANIMALS.map(e=>`<button class="avopt ${cur.e===e?"on":""}" aria-label="Animal ${e}" onclick="setAva('${e}',null)">${e}</button>`).join("")}${isCreator()?`<button class="avopt ${cur.e==="crow"?"on":""}" aria-label="Crow" onclick="setAva('crow',null)">${CROW_SVG}</button>`:""}<button class="avopt txt ${!cur.e?"on":""}" aria-label="Use my first letter" onclick="setAva('',null)">Aa</button></div>
   <p class="small" style="margin:14px 0 6px"><b>Colour</b></p>
   <div class="avgrid">${AV_COLOURS.map(c=>`<button class="swatch ${(cur.c||"#ff7a1a")===c?"on":""}" style="background:${c}" aria-label="Colour ${c}" onclick="setAva(null,'${c}')"></button>`).join("")}</div></div>`;
 }
@@ -1305,7 +1445,7 @@ function setTimer(i){
 
 /* ===== VIEWS ===== */
 const TITLES={admin:"Admin Panel",home:"Home",subjects:"Subjects",subject:"Subject",quiz:"Quiz",tests:"Test path",foryou:"For You",cards:"Flashcards",leaderboard:"Leaderboard",advice:"Study Advice",timer:"Study Timer",methods:"Study Methods",planner:"Planner",awards:"Awards",settings:"Settings"};
-function go(v,a){view=v;arg=a||null;render()}
+function go(v,a){view=v;arg=a||null;render();if(v==="leaderboard"||v==="admin")refreshBoard()}
 function subjectCard(s){return `<div class="subject" style="--c:${s.c}" tabindex="0" role="button" onclick="go('subject','${s.id}')" onkeydown="if(event.key==='Enter')go('subject','${s.id}')"><div class="ico">${s.icon}</div><h3>${s.name}</h3><div class="small">${s.topics.length} topics · ${s.qs.length} quiz questions</div></div>`}
 
 function render(){
@@ -1414,7 +1554,7 @@ Object.assign(EVENTS,{
   const st=document.createElement("style");st.textContent=css;document.head.appendChild(st);
 })();
 function isCreator(){return currentUser===ADMIN_USER}
-function isCoAdmin(k){const u=getUsers()[k];return !!(u&&u.admin&&!u.banned)}
+function isCoAdmin(k){const u=getUsers()[k];return !!(u&&(u.admin||(u.gid&&GADM[u.gid]===true))&&!u.banned)}
 function isAdmin(){return isCreator()||isCoAdmin(currentUser)}
 function adminOnly(){if(!isAdmin()){toast("Admins only.");return false}return true}
 function creatorOnly(){if(!isCreator()){toast("Only the creator can do that.");return false}return true}
@@ -1425,6 +1565,7 @@ function adminMake(k,on){
   if(on&&users[k].banned)return toast("Unban this account first.");
   if(on&&!confirm("Make "+(users[k].name||k)+" an admin? They'll be able to post announcements, change themes, give XP, reset progress and ban normal users."))return;
   users[k].admin=!!on;setUsers(users);
+  {const gid=gId(k);gSend(on?"PUT":"DELETE","/admins/"+gid,on?true:undefined);GADM[gid]=!!on||undefined}
   toast((users[k].name||k)+(on?" is now an admin.":" is no longer an admin."));render();
 }
 function adminMakePick(){
@@ -1432,7 +1573,7 @@ function adminMakePick(){
   adminMake(el.value,true);
 }
 function site(){try{const s=JSON.parse(store("gradeo_site","{}"));return(s&&typeof s==="object")?s:{}}catch(e){return{}}}
-function setSite(patch){const before=evKey();const s=Object.assign(site(),patch);save("gradeo_site",JSON.stringify(s));applyEvent();updateBanner();if(evKey()!==before)burstFX()}
+function setSite(patch){const before=evKey();const s=Object.assign(site(),patch);save("gradeo_site",JSON.stringify(s));applyEvent();updateBanner();if(evKey()!==before)burstFX();siteWrote=Date.now();gSend("PATCH","/site",patch)}
 function autoEvent(){
   const d=new Date(),m=d.getMonth()+1;
   if(m===12)return"christmas";if(m===10)return"halloween";if(m>=6&&m<=8)return"summer";
@@ -1508,7 +1649,7 @@ function qotdAnswer(){
   if(v===norm(s.q.a)){save("gradeo_qotd",s.q.id);const g=addXP(15);toast("Correct! +"+g+" XP 🎉");burstFX();render()}
   else toast("Not quite. Try again!");
 }
-function adminEvent(k){if(!adminOnly())return;setSite({event:k||""});toast(k?EVENTS[k].n+" mode is on for everyone on this device.":"Event theme turned off.");render()}
+function adminEvent(k){if(!adminOnly())return;setSite({event:k||""});toast(k?EVENTS[k].n+" mode is on for everyone.":"Event theme turned off.");render()}
 function adminBoost(n){if(!adminOnly())return;setSite({boost:n});toast(n>1?n+"× XP is on.":"XP boost off.");render()}
 function adminPost(){if(!adminOnly())return;const v=document.getElementById("admMsg").value.trim().slice(0,200);setSite({msg:v});toast(v?"Announcement posted.":"Announcement cleared.");render()}
 function adminExam(clear){
@@ -1534,9 +1675,10 @@ function adminGive(k){
 }
 function adminGiveAll(){
   if(!adminOnly())return;
-  const n=Math.round(Number(prompt("XP to give EVERYONE on this device:","50")));
+  const n=Math.round(Number(prompt("XP to give EVERYONE (every device):","50")));
   if(!n||n<1||n>100000)return;
-  Object.keys(getUsers()).forEach(k=>giveXP(k,n));toast("Gave everyone "+n+" XP.");render();
+  setSite({gall:{id:String(Date.now()),n:n,t:Date.now()}});applyGall();
+  toast("Gave everyone "+n+" XP. They get it next time they open Gradeo.");render();
 }
 function adminBan(k,on){
   if(!adminOnly())return;
@@ -1545,6 +1687,7 @@ function adminBan(k,on){
   if(users[k].admin&&!isCreator())return toast("Only the creator can ban an admin.");
   if(on&&!confirm("Ban "+(users[k].name||k)+"? They won't be able to log in."))return;
   users[k].banned=!!on;if(on)users[k].admin=false;setUsers(users);
+  {const gid=gId(k);gSend("PATCH","/ctl/"+gid,{ban:!!on});if(on)gSend("DELETE","/admins/"+gid)}
   toast((users[k].name||k)+(on?" has been banned.":" has been unbanned."));render();
 }
 function userKeys(k){
@@ -1558,13 +1701,14 @@ function adminReset(k){
   if(isCoAdmin(k)&&!isCreator())return toast("Only the creator can reset an admin.");
   if(!confirm("Reset all progress for "+k+"? This can't be undone."))return;
   try{userKeys(k).forEach(x=>localStorage.removeItem(x))}catch(e){}
+  gSend("PUT","/scores/"+gId(k),{n:String(getUsers()[k].name||k).slice(0,20),xp:0,q:0,e:"",c:"#ff7a1a"});
   toast("Progress reset.");render();
 }
 function adminDelete(k){
   if(!creatorOnly())return;
   if(k===ADMIN_USER)return toast("The creator account can't be deleted here.");
   if(!confirm("Delete the account "+k+" and all its data? This can't be undone."))return;
-  const users=getUsers();delete users[k];setUsers(users);
+  const users=getUsers();{const gid=users[k]&&users[k].gid;if(gid){gSend("DELETE","/scores/"+gid);gSend("DELETE","/admins/"+gid)}}delete users[k];setUsers(users);
   try{userKeys(k).forEach(x=>localStorage.removeItem(x))}catch(e){}
   toast("Account deleted.");render();
 }
@@ -1612,10 +1756,63 @@ function adminStats(){
   ks.forEach(k=>{xp+=k===currentUser?state.xp:lsNum("gradeo_u_"+k+"_gradeo_xp");qz+=k===currentUser?state.quizzes:lsNum("gradeo_u_"+k+"_gradeo_quizzes")});
   return{users:ks.length,banned:ks.filter(k=>users[k].banned).length,xp:xp,qz:qz};
 }
+
+function gProt(id){
+  if(!gRowOk(id))return false;
+  if(id===gId()){toast("Use your own account for that.");return false}
+  if(GADM[id]===true&&!isCreator()){toast("Only the creator can do that to an admin.");return false}
+  return true;
+}
+function gName(id){const r=(GLB.rows||[]).find(x=>x.id===id);return r?r.u.name:"this player"}
+function gAdminGive(id){
+  if(!adminOnly()||!gProt(id))return;
+  const n=Math.round(Number(prompt("How much XP to give "+gName(id)+"? (use a minus number to take away)","100")));
+  if(!n||Math.abs(n)>100000)return;
+  gSend("PATCH","/ctl/"+id,{gift:{id:String(Date.now()),n:n}}).then(()=>toast((n>0?"Sent ":"Took ")+Math.abs(n)+" XP. They get it next time they open Gradeo."));
+}
+function gAdminReset(id){
+  if(!adminOnly()||!gProt(id))return;
+  if(!confirm("Reset ALL progress for "+gName(id)+"? This can't be undone."))return;
+  gSend("PATCH","/ctl/"+id,{reset:String(Date.now())}).then(()=>toast("Reset sent."));
+}
+function gAdminBan(id,on){
+  if(!adminOnly()||!gProt(id))return;
+  if(on&&!confirm("Ban "+gName(id)+" everywhere? They'll be logged out and can't log back in."))return;
+  GCTL[id]=Object.assign({},GCTL[id],{ban:!!on});
+  if(on){delete GADM[id];gSend("DELETE","/admins/"+id)}
+  gSend("PATCH","/ctl/"+id,{ban:!!on}).then(()=>toast(on?"Banned.":"Unbanned."));render();
+}
+function gAdminMake(id,on){
+  if(!creatorOnly()||!gRowOk(id)||id===gId())return;
+  if(on&&GCTL[id]&&GCTL[id].ban===true)return toast("Unban them first.");
+  if(on&&!confirm("Make "+gName(id)+" an admin on every device?"))return;
+  if(on)GADM[id]=true;else delete GADM[id];
+  gSend(on?"PUT":"DELETE","/admins/"+id,on?true:undefined).then(()=>toast(on?"They're an admin now.":"Admin removed."));render();
+}
+function gAdminRemove(id){
+  if(!adminOnly()||!gProt(id))return;
+  if(!confirm("Remove "+gName(id)+" from the leaderboard? They come back if they play again."))return;
+  if(GLB.rows)GLB.rows=GLB.rows.filter(r=>r.id!==id);
+  gSend("DELETE","/scores/"+id).then(()=>toast("Removed."));render();
+}
+function gPlayersHTML(){
+  if(!GLOBAL_DB)return `<div class="card"><h3>🌍 Global mode is OFF</h3><p class="small">Right now admin commands only affect this device. Paste your Firebase database URL into <b>GLOBAL_DB</b> at the top of the code to switch it on. The setup steps are in the comment right above it.</p></div>`;
+  const rows=GLB.rows||[],cr=isCreator(),me=gId();
+  let h=`<div class="card"><h3>🌍 Global players</h3><p class="small">Everyone who has played Gradeo on any device. Announcements, themes, XP boosts, the countdown and the question of the day below already reach everyone. The buttons here reach one player, the next time they open Gradeo (about 30 seconds if it's already open).</p><div class="row" style="margin-bottom:10px"><button class="btn secondary sm" onclick="refreshBoard()">↻ Refresh</button>${GLB.loading?'<span class="small">Loading…</span>':""}${GLB.err?'<span class="small">'+escapeHTML(GLB.err)+'</span>':""}</div>`;
+  if(!rows.length&&!GLB.loading&&!GLB.err)h+=`<p class="small">Nobody has played yet.</p>`;
+  h+=rows.slice(0,100).map(r=>{
+    const adm=GADM[r.id]===true,bn=!!(GCTL[r.id]&&GCTL[r.id].ban===true),locked=r.id===me||(adm&&!cr);
+    return `<div class="adm-row"><div class="grow"><b>${escapeHTML(r.u.name)}</b> ${adm?'<span class="crown">🛡️ admin</span>':""} ${bn?'<span class="banned-tag">BANNED</span>':""}${r.id===me?" (you)":""}<div class="small">${r.xp} XP · ${r.quizzes} quizzes</div></div>`+
+    (locked?`<span class="small">${r.id===me?"":"Creator only"}</span>`:
+    `<button class="btn secondary sm" onclick="gAdminGive('${r.id}')">±XP</button><button class="btn secondary sm" onclick="gAdminReset('${r.id}')">Reset</button>${bn?`<button class="btn sm" onclick="gAdminBan('${r.id}',false)">Unban</button>`:`<button class="btn danger sm" onclick="gAdminBan('${r.id}',true)">Ban</button>`}`+(cr?(adm?`<button class="btn danger sm" onclick="gAdminMake('${r.id}',false)">Remove admin</button>`:`<button class="btn secondary sm" onclick="gAdminMake('${r.id}',true)">Make admin</button>`):"")+`<button class="btn secondary sm" onclick="gAdminRemove('${r.id}')">Remove</button>`)+`</div>`;
+  }).join("");
+  return h+`</div>`;
+}
 function adminHTML(){
   if(!isAdmin())return"";
   const s=site(),users=getUsers();
   let h=`<div class="card"><h3><span class="crown">${isCreator()?"👑":"🛡️"}</span> ${isCreator()?"Creator":"Admin"} Panel</h3><p class="small">${isCreator()?"Only you (bbxultra) and the admins you pick can see this.":"You're an admin. The creator can remove your access at any time."} Changes apply to everyone who uses Gradeo in this browser.</p></div>`;
+  h+=gPlayersHTML()+(window.cmdHTML?cmdHTML():"")+(window.updHTML?updHTML():"");
   h+=`<div class="card"><h3>Seasonal themes</h3><p class="small">Change the whole look any time. The emoji fall for a few seconds when a theme starts, then disappear so they don't distract revision.</p><div class="chips">${Object.keys(EVENTS).map(k=>`<button class="chip ${s.event===k?"on":""}" onclick="adminEvent('${k}')">${EVENTS[k].i} ${EVENTS[k].n}</button>`).join("")}<button class="chip ${!s.event?"on":""}" onclick="adminEvent('')">Off</button></div><div class="row" style="margin-top:12px"><button class="btn secondary sm" onclick="adminReplay()">🎬 Replay effect</button><button class="btn secondary sm" onclick="adminAuto()">${s.auto?"✅":"⬜"} Auto seasons (follow the calendar)</button></div><div class="row" style="margin-top:12px"><label class="small" for="admAc"><b>Accent colour</b></label><input id="admAc" type="color" style="width:56px;padding:2px" value="${s.accent||"#2b50ff"}" onchange="adminAccent(this.value)"><button class="btn secondary sm" onclick="adminAccent('')">Reset</button></div></div>`;
   const st=adminStats();
   h+=`<div class="card"><h3>At a glance</h3><div class="statbox"><div><b>${st.users}</b><span class="small">accounts</span></div><div><b>${st.xp}</b><span class="small">total XP</span></div><div><b>${st.qz}</b><span class="small">quizzes done</span></div></div>${st.banned?`<p class="small" style="margin:10px 0 0">${st.banned} banned</p>`:""}</div>`;
@@ -1655,6 +1852,205 @@ function toggleTheme(){
   const su=getUsers()[key];
   if(key&&su&&!(su.banned&&key!==ADMIN_USER))login(key);else showAuth("login");
 })();
+</script>
+<script>
+/* ============================================================
+   ADD-ON: COMMAND CONSOLE + UPDATE AREA
+   UPDATE_KEY: leave "" for now. To allow live JavaScript updates:
+   Admin Panel > Update area > "Create signing key", paste the key it
+   shows between the quotes below, then re-upload this file.
+   ============================================================ */
+const UPDATE_KEY="";
+
+/* ---- 50 look toggles (CSS). Each one is a command: /name ---- */
+const FL={
+bigtext:["Bigger text","html{font-size:112%}"],
+hugetext:["Huge text","html{font-size:125%}"],
+smalltext:["Smaller text","html{font-size:92%}"],
+compact:["Tighter spacing",".card{padding:14px}.main{padding:20px}"],
+roomy:["Roomier spacing",".card{padding:30px}.main{padding:44px}"],
+square:["Square corners","*{border-radius:4px!important}.av,.avs{border-radius:50%!important}"],
+pill:["Extra round corners",".card,.btn,input{border-radius:30px!important}"],
+noshadow:["No shadows","*{box-shadow:none!important}"],
+thick:["Thick borders",".card,.btn,input{border-width:3px!important}"],
+gray:["Greyscale","body{filter:grayscale(1)}"],
+sepia:["Sepia","body{filter:sepia(.8)}"],
+invert:["Invert colours","body{filter:invert(1) hue-rotate(180deg)}"],
+contrast:["High contrast","body{filter:contrast(1.25)}"],
+vivid:["Vivid colours","body{filter:saturate(1.5)}"],
+dull:["Muted colours","body{filter:saturate(.6)}"],
+hue1:["Hue shift 1","body{filter:hue-rotate(40deg)}"],
+hue2:["Hue shift 2","body{filter:hue-rotate(120deg)}"],
+hue3:["Hue shift 3","body{filter:hue-rotate(220deg)}"],
+dim:["Dimmer","body{filter:brightness(.85)}"],
+bright:["Brighter","body{filter:brightness(1.1)}"],
+mono:["Monospace font","body,h1,h2,h3,.stat,.timer,.logo{font-family:ui-monospace,Consolas,monospace!important}"],
+serif:["Serif font","body,h1,h2,h3,.stat,.timer,.logo{font-family:Georgia,serif!important}"],
+dyslexia:["Easy-read font","body{font-family:Verdana,Tahoma,sans-serif!important;letter-spacing:.03em;word-spacing:.12em}"],
+comic:["Comic font","body,h1,h2,h3,.stat,.timer,.logo{font-family:'Comic Sans MS','Chalkboard SE',cursive!important}"],
+caps:["UPPERCASE headings","h1,h2,h3{text-transform:uppercase}"],
+airy:["Airy line spacing","body{line-height:1.8}"],
+wide:["Full-width layout",".main{max-width:none}"],
+narrow:["Narrow layout",".main{max-width:760px}"],
+zoomout:["Zoom 90%","body{zoom:.9}"],
+zoomin:["Zoom 110%","body{zoom:1.1}"],
+nohero:["Hide home banner card",".hero{display:none}"],
+nostats:["Hide home stat cards",".stats{display:none}"],
+notheme:["Hide theme button","button[onclick*=toggleTheme]{display:none}"],
+noav:["Hide profile circle","#avatarTop{display:none}"],
+still:["Stop all animations","*{animation:none!important;transition:none!important}"],
+links:["Underline links","a{text-decoration:underline}"],
+bigbtn:["Big buttons",".btn,.chip,.option{padding:16px 22px!important;font-size:110%}"],
+focus:["Focus mode (hide sidebar)",".sidebar{display:none}.main{margin-left:0;width:100%}"],
+sideright:["Sidebar on the right",".sidebar{left:auto;right:0}.main{margin-left:0;margin-right:250px}"],
+glow:["Neon glow",".card,.btn{box-shadow:0 0 14px var(--blue)!important}"],
+tilt:["Tilted cards",".grid .card:nth-child(odd){transform:rotate(-1deg)}.grid .card:nth-child(even){transform:rotate(1deg)}"],
+bounce:["Bouncy buttons",".btn:hover{transform:scale(1.08)!important}"],
+rainbow:["Rainbow logo text",".logo span{background:linear-gradient(90deg,red,orange,yellow,green,cyan,blue,violet);-webkit-background-clip:text;color:transparent}"],
+grid:["Graph-paper background","body{background-image:linear-gradient(#0001 1px,transparent 1px),linear-gradient(90deg,#0001 1px,transparent 1px);background-size:24px 24px}"],
+dots:["Dotted background","body{background-image:radial-gradient(#0002 1.5px,transparent 1.5px);background-size:18px 18px}"],
+sunset:["Gradient background","body{background-image:linear-gradient(160deg,#ffd6a5,#fdffb6,#caffbf,#9bf6ff);background-attachment:fixed}"],
+night:["Warm night tint","body::after{content:'';position:fixed;inset:0;background:#ff7a1a22;pointer-events:none;z-index:9999}"],
+cool:["Cool tint","body::after{content:'';position:fixed;inset:0;background:#2b50ff18;pointer-events:none;z-index:9999}"],
+vignette:["Vignette","body::after{content:'';position:fixed;inset:0;box-shadow:inset 0 0 150px #0008;pointer-events:none;z-index:9999}"],
+scan:["Retro scanlines","body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(#0000 0 2px,#0002 2px 3px);pointer-events:none;z-index:9999}"]
+};
+const FXS={confetti:["🎉","🎊","✨","🥳"],fire:["🔥","🔥","💥"],stars:["⭐","🌟","✨","💫"],hearts:["💖","💕","💗"],snowfall:["❄️","⛄","❄️"],rain:["🌧️","💧","☔"],money:["💰","🪙","💸"],ghosts:["👻","🎃","🦇"],crows:["🐦‍⬛"],rocket:["🚀","🛸","🌠"],balloons:["🎈","🎈","🎉"],sparkle:["✨","💫","⭐"]};
+
+function fxRun(list,crows){
+  if(window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches)return;
+  let fx=document.getElementById("evfx");if(!fx){fx=document.createElement("div");fx.id="evfx";fx.setAttribute("aria-hidden","true");document.body.appendChild(fx)}
+  fx.innerHTML="";
+  for(let i=0;i<30;i++){const sp=document.createElement("span");sp.textContent=list[i%list.length];sp.style.left=Math.random()*100+"%";sp.style.fontSize=(16+Math.random()*18)+"px";sp.style.animationDuration=(3+Math.random()*2.5)+"s";sp.style.animationDelay=Math.random()*1.5+"s";fx.appendChild(sp)}
+  if(crows)crowFlock(fx);
+  clearTimeout(fx._t);fx._t=setTimeout(()=>{fx.innerHTML=""},crows?15000:7500);
+}
+
+/* ---- apply everything the admins set (runs on every device) ---- */
+function applyFlags(){
+  const s=site(),f=(s.fl&&typeof s.fl==="object")?s.fl:{};
+  let css=Object.keys(f).filter(k=>f[k]===true&&FL[k]).map(k=>FL[k][1]).join("\n");
+  css+="\n"+String(s.css||"").slice(0,6000).replace(/@import|url\s*\(|expression\s*\(|<\/?style|javascript:/gi,"");
+  let st=document.getElementById("flcss");if(!st){st=document.createElement("style");st.id="flcss";document.head.appendChild(st)}
+  if(st.textContent!==css)st.textContent=css;
+  if(!currentUser)return;
+  if(s.fx&&s.fx.id&&store("gradeo_fx","")!==String(s.fx.id)){save("gradeo_fx",String(s.fx.id));if(Date.now()-(Number(s.fx.t)||0)<12e4&&FXS[s.fx.k])fxRun(FXS[s.fx.k],s.fx.k==="crows")}
+  if(s.rl&&store("gradeo_rl","")!==String(s.rl)){save("gradeo_rl",String(s.rl));if(Date.now()-(Number(s.rl)||0)<6e5)setTimeout(()=>location.reload(),800)}
+  if(s.js&&s.js.id&&window._jsRan!==s.js.id)runSigned(s.js);
+}
+const _ae=applyEvent;applyEvent=function(){_ae();applyFlags()};
+
+/* ---- private messages and kicks aimed at one player ---- */
+const _ac=applyCtl;applyCtl=function(c){
+  if(currentUser&&currentUser!==ADMIN_USER){
+    if(c.dm&&c.dm.id&&store("gradeo_ctl_dm","")!==String(c.dm.id)){save("gradeo_ctl_dm",String(c.dm.id));if(Date.now()-(Number(c.dm.id)||0)<864e5)alert("📩 Message from an admin:\n\n"+String(c.dm.t).slice(0,300))}
+    if(c.kick&&store("gradeo_ctl_kick","")!==String(c.kick)){save("gradeo_ctl_kick",String(c.kick));if(Date.now()-(Number(c.kick)||0)<6e5){logout();return}}
+  }
+  _ac(c);
+};
+
+/* ---- signed JavaScript updates (only run if signed with your key) ---- */
+const enc=new TextEncoder(),b2u=b=>Uint8Array.from(atob(b),c=>c.charCodeAt(0)),u2b=u=>btoa(String.fromCharCode(...new Uint8Array(u)));
+async function runSigned(j){
+  window._jsRan=j.id;
+  try{
+    if(!UPDATE_KEY)return;
+    const k=await crypto.subtle.importKey("jwk",JSON.parse(UPDATE_KEY),{name:"ECDSA",namedCurve:"P-256"},false,["verify"]);
+    if(await crypto.subtle.verify({name:"ECDSA",hash:"SHA-256"},k,b2u(j.sig),enc.encode(j.code)))new Function(j.code)();
+  }catch(e){}
+}
+async function updKey(){
+  if(!creatorOnly())return;
+  if(localStorage.getItem("gradeo_sigkey")&&!confirm("A signing key already exists on this device. Make a new one? Old signed updates stop working."))return;
+  const kp=await crypto.subtle.generateKey({name:"ECDSA",namedCurve:"P-256"},true,["sign","verify"]);
+  localStorage.setItem("gradeo_sigkey",JSON.stringify(await crypto.subtle.exportKey("jwk",kp.privateKey)));
+  prompt("Copy this, paste it between the quotes of UPDATE_KEY in the code, then re-upload the file. Keep this device: the private key lives here.",JSON.stringify(await crypto.subtle.exportKey("jwk",kp.publicKey)));
+}
+function updCSS(){if(!creatorOnly())return;setSite({css:document.getElementById("updCss").value.slice(0,6000)});toast("CSS published to everyone.")}
+async function updJS(publish){
+  if(!creatorOnly())return;
+  const code=document.getElementById("updJs").value;
+  if(!publish){try{new Function(code)();toast("Ran on this device only.")}catch(e){toast("Error: "+e.message)}return}
+  if(!code.trim()){setSite({js:null});return toast("JS update cleared.")}
+  try{new Function(code)}catch(e){return toast("Syntax error: "+e.message)}
+  const raw=localStorage.getItem("gradeo_sigkey");if(!raw)return toast("Create a signing key first.");
+  if(!UPDATE_KEY)return toast("Paste your public key into UPDATE_KEY first.");
+  const k=await crypto.subtle.importKey("jwk",JSON.parse(raw),{name:"ECDSA",namedCurve:"P-256"},false,["sign"]);
+  const sig=u2b(await crypto.subtle.sign({name:"ECDSA",hash:"SHA-256"},k,enc.encode(code)));
+  setSite({js:{id:String(Date.now()),code:code,sig:sig}});toast("JS update published to everyone.");
+}
+function updHTML(){
+  if(!isCreator())return"";const s=site();
+  return `<div class="card"><h3>🛠️ Update area</h3><p class="small">Small live updates for everyone, no re-upload needed. <b>CSS</b> changes the look. <b>JavaScript</b> changes behaviour, but only runs on a device if it is signed with your key, so nobody else can push code. JS runs again on each page load, so keep it safe to repeat.</p>
+  <p class="small" style="margin:10px 0 6px"><b>CSS</b></p><textarea id="updCss" rows="5" placeholder=".card{border-radius:8px}">${escapeHTML(s.css||"")}</textarea>
+  <div class="row" style="margin-top:8px"><button class="btn" onclick="updCSS()">Publish CSS</button><button class="btn secondary" onclick="document.getElementById('updCss').value='';updCSS()">Clear</button></div>
+  <p class="small" style="margin:14px 0 6px"><b>JavaScript</b> ${UPDATE_KEY?"":"(needs UPDATE_KEY, see the comment in the code)"}</p><textarea id="updJs" rows="6" placeholder="toast('Hello everyone!')">${escapeHTML((s.js&&s.js.code)||"")}</textarea>
+  <div class="row" style="margin-top:8px"><button class="btn secondary" onclick="updJS(false)">▶ Test here only</button><button class="btn" onclick="updJS(true)">Publish JS</button><button class="btn secondary" onclick="updKey()">🔑 Create signing key</button></div></div>`;
+}
+
+/* ---- command registry ---- */
+const CMDS=[];
+function C(n,d,f,a){CMDS.push({n:n,d:d,f:f,a:a||""})}
+function xpAll(n){setSite({gall:{id:String(Date.now()),n:n,t:Date.now()}});applyGall();toast("Gave everyone "+n+" XP.")}
+function cmdTarget(n){
+  n=(n||"").replace(/^@/,"").toLowerCase();if(!n)return null;
+  const rows=GLB.rows||[],ex=rows.filter(x=>x.u.name.toLowerCase()===n),p=ex.length?ex:rows.filter(x=>x.u.name.toLowerCase().startsWith(n));
+  if(p.length!==1){toast(p.length?"Several players match, be more specific.":"No player called "+n+". Tap Refresh in Global players first.");return null}
+  return p[0];
+}
+function T(a,prot){if(!GLOBAL_DB){toast("Needs global mode (GLOBAL_DB).");return null}const t=cmdTarget(a[0]);if(!t)return null;if(prot&&!gProt(t.id))return null;return t}
+const ACC={red:"#e5484d",orange:"#ff7a1a",yellow:"#f5b800",green:"#1a9e5c",teal:"#17a2b8",blue:"#2b50ff",indigo:"#4338ca",purple:"#8e24aa",pink:"#e91e8c",black:"#111827",gold:"#c9a227"};
+const SAY={goodluck:"Good luck today, you've got this! 🍀",break:"Time for a 10 minute break. Stretch and drink water! 💧",mocks:"Mocks are coming. Little and often beats cramming! 📚",results:"Results day is close. Whatever happens, you tried your best. 💪",homework:"Don't forget your homework!",quiet:"Quiet revision hour. Phones away! 🤫",maintenance:"Gradeo may refresh briefly for an update. Your progress is safe. 🛠️",update:"New update live! Refresh to see it. ✨",streak:"Keep your streak alive today, even one quiz counts! 🔥",water:"Drink some water! 💧",sleep:"Sleep beats late-night cramming. Get some rest! 😴",welcome:"Welcome to Gradeo! Pick a subject and start earning XP. 🎉"};
+
+Object.keys(FL).forEach(k=>C(k,FL[k][0]+" (toggle for everyone)",()=>{const f=Object.assign({},site().fl);if(f[k])delete f[k];else f[k]=true;setSite({fl:f});toast(FL[k][0]+(f[k]?" on.":" off."))}));
+Object.keys(FXS).forEach(k=>C(k,"Effect on everyone's screen",()=>{setSite({fx:{id:String(Date.now()),k:k,t:Date.now()}});toast("Sent "+k+" to everyone.")}));
+Object.keys(ACC).forEach(k=>C("accent-"+k,"Accent colour: "+k,()=>{setSite({accent:ACC[k]});toast("Accent: "+k)}));
+[10,25,50,100,250,500,1000].forEach(n=>C("xp"+n,"Give everyone "+n+" XP",()=>xpAll(n)));
+[2,3,5,10].forEach(n=>C("boost"+n,n+"× XP for everyone",()=>{setSite({boost:n});toast(n+"× XP on.")}));
+C("boost-off","Turn XP boost off",()=>{setSite({boost:1});toast("XP boost off.")});
+Object.keys(SAY).forEach(k=>C("say-"+k,"Announce: "+SAY[k].slice(0,38)+"…",()=>{setSite({msg:SAY[k]});toast("Announcement posted.")}));
+C("clear-msg","Clear the announcement",()=>setSite({msg:""}));
+C("clear-exam","Clear the exam countdown",()=>setSite({exam:null}));
+C("clear-qotd","Remove question of the day",()=>setSite({q:null}));
+C("reset-look","Turn off all look toggles, CSS, accent and theme",()=>setSite({fl:null,css:"",accent:"",event:""}));
+C("reload-all","Make everyone's page refresh once",()=>{setSite({rl:Date.now()});toast("Refresh sent.")});
+C("help","How commands work",()=>alert("Type /name and press Enter, or tap any command in the list.\nExamples:\n/confetti\n/xp50\n/give @sam 50\n/dm @sam well done!\n/qotd What is 7x8? | 56\n/countdown Maths 2026-11-05\n\n"+CMDS.length+" commands in total."));
+C("say","Custom announcement",a=>{setSite({msg:a.join(" ").slice(0,200)});toast("Posted.")},"text");
+C("countdown","Exam countdown",a=>{const d=a.pop();if(!/^\d{4}-\d{2}-\d{2}$/.test(d||""))return toast("Use /countdown Maths 2026-11-05");setSite({exam:{name:a.join(" ").slice(0,40),date:d}});toast("Countdown set.")},"name YYYY-MM-DD");
+C("qotd","Question of the day",a=>{const t=a.join(" ").split("|");if(t.length<2||!t[1].trim())return toast("Use /qotd question | answer");setSite({q:{id:String(Date.now()),q:t[0].trim().slice(0,200),a:t[1].trim().slice(0,60)}});toast("Question posted.")},"question | answer");
+C("theme","Seasonal theme (blank = off)",a=>{const k=(a[0]||"").toLowerCase();if(k&&!EVENTS[k])return alert("Themes: "+Object.keys(EVENTS).join(", "));setSite({event:k});toast(k?"Theme: "+k:"Theme off.")},"name");
+C("accent","Custom accent colour",a=>{if(!/^#[0-9a-f]{6}$/i.test(a[0]||""))return toast("Use /accent #ff7a1a");setSite({accent:a[0]});toast("Accent set.")},"#hex");
+C("boost","XP multiplier",a=>{const n=Number(a[0]);if(!(n>=1&&n<=20))return toast("Use /boost 2");setSite({boost:n});toast(n+"× XP.")},"1 to 20");
+C("xpall","Give everyone any amount of XP",a=>{const n=Math.round(Number(a[0]));if(!n||n<1||n>100000)return toast("Use /xpall 50");xpAll(n)},"amount");
+C("players","List global players",()=>alert((GLB.rows||[]).map(r=>r.u.name+" · "+r.xp+" XP").join("\n")||"Tap Refresh in Global players first."));
+C("top","Top 5 on the leaderboard",()=>alert((GLB.rows||[]).slice(0,5).map((r,i)=>(i+1)+". "+r.u.name+" · "+r.xp+" XP").join("\n")||"No data yet."));
+C("stats","Totals for this device and global",()=>{const t=adminStats();alert(t.users+" accounts here, "+t.xp+" XP, "+t.qz+" quizzes.\nGlobal players: "+(GLB.rows||[]).length)});
+C("count","How many global players",()=>toast((GLB.rows||[]).length+" global players"));
+C("admins","List admins",()=>{const u=getUsers();alert(Object.keys(u).filter(k=>k===ADMIN_USER||u[k].admin).map(k=>u[k].name||k).join("\n"))});
+C("banned","List banned players",()=>alert((GLB.rows||[]).filter(r=>GCTL[r.id]&&GCTL[r.id].ban===true).map(r=>r.u.name).join("\n")||"Nobody is banned."));
+C("dm","Private message to one player",a=>{const t=T(a,1);if(!t)return;const x=a.slice(1).join(" ").slice(0,300);if(!x)return toast("Use /dm @name message");gSend("PATCH","/ctl/"+t.id,{dm:{id:String(Date.now()),t:x}}).then(()=>toast("Sent to "+t.u.name+"."))},"@name text");
+C("kick","Log one player out (they can log back in)",a=>{const t=T(a,1);if(!t)return;gSend("PATCH","/ctl/"+t.id,{kick:String(Date.now())}).then(()=>toast(t.u.name+" will be logged out."))},"@name");
+C("give","Give one player XP",a=>{const t=T(a,1),n=Math.round(Number(a[1]));if(!t)return;if(!n||Math.abs(n)>100000)return toast("Use /give @name 50");gSend("PATCH","/ctl/"+t.id,{gift:{id:String(Date.now()),n:n}}).then(()=>toast("Sent "+n+" XP to "+t.u.name+"."))},"@name amount");
+C("take","Take XP from one player",a=>{const t=T(a,1),n=Math.abs(Math.round(Number(a[1])));if(!t)return;if(!n||n>100000)return toast("Use /take @name 50");gSend("PATCH","/ctl/"+t.id,{gift:{id:String(Date.now()),n:-n}}).then(()=>toast("Took "+n+" XP from "+t.u.name+"."))},"@name amount");
+C("ban","Ban a player everywhere",a=>{const t=T(a);if(t)gAdminBan(t.id,true)},"@name");
+C("unban","Unban a player",a=>{const t=T(a);if(t)gAdminBan(t.id,false)},"@name");
+C("promote","Make a player an admin (creator only)",a=>{const t=T(a);if(t)gAdminMake(t.id,true)},"@name");
+C("demote","Remove a player's admin (creator only)",a=>{const t=T(a);if(t)gAdminMake(t.id,false)},"@name");
+C("reset","Reset one player's progress",a=>{const t=T(a);if(t)gAdminReset(t.id)},"@name");
+
+function runCmd(raw){
+  if(!adminOnly())return;
+  const p=String(raw||"").trim().replace(/^\//,"").split(/\s+/),n=(p.shift()||"").toLowerCase(),c=CMDS.find(x=>x.n===n);
+  if(!c)return toast("Unknown command. Try /help");
+  try{c.f(p)}catch(e){toast("Command failed: "+e.message)}
+  render();
+}
+function cmdHTML(){
+  return `<div class="card"><h3>⌨️ Command console</h3><p class="small">${CMDS.length} commands. Type one and press Enter, e.g. <b>/confetti</b>, <b>/xp50</b>, <b>/dm @sam hello</b>. Look, effect, XP and announcement commands reach everyone.</p>
+  <div class="row"><input id="cmdIn" placeholder="/help" autocapitalize="off" autocomplete="off" onkeydown="if(event.key==='Enter')runCmd(this.value)"><button class="btn" onclick="runCmd(document.getElementById('cmdIn').value)">Run</button></div>
+  <details style="margin-top:12px"><summary><b>All ${CMDS.length} commands</b></summary>${CMDS.map(c=>`<div class="adm-row"><button class="btn secondary sm" onclick="${c.a?`var i=document.getElementById('cmdIn');i.value='/${c.n} ';i.focus()`:`runCmd('${c.n}')`}">/${c.n}</button><span class="small grow">${escapeHTML(c.d)}${c.a?" · "+escapeHTML(c.a):""}</span></div>`).join("")}</details></div>`;
+}
+applyFlags();setTimeout(applyFlags,600);
 </script>
 </body>
 </html>
