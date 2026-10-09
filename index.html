@@ -1860,7 +1860,7 @@ function toggleTheme(){
    Admin Panel > Update area > "Create signing key", paste the key it
    shows between the quotes below, then re-upload this file.
    ============================================================ */
-const UPDATE_KEY="";
+const UPDATE_KEY='{"crv":"P-256","ext":true,"key_ops":["verify"],"kty":"EC","x":"hnmPw29osFs9sWxdxZh2qCaQBORDqqe1GZS-hMZUyEs","y":"VtIh_im3LP03A7cAVMYEtlqn2OMtEQBh9pp6MgvMy6k"}';
 
 /* ---- 50 look toggles (CSS). Each one is a command: /name ---- */
 const FL={
@@ -2014,7 +2014,7 @@ C("clear-exam","Clear the exam countdown",()=>setSite({exam:null}));
 C("clear-qotd","Remove question of the day",()=>setSite({q:null}));
 C("reset-look","Turn off all look toggles, CSS, accent and theme",()=>setSite({fl:null,css:"",accent:"",event:""}));
 C("reload-all","Make everyone's page refresh once",()=>{setSite({rl:Date.now()});toast("Refresh sent.")});
-C("help","How commands work",()=>alert("Type /name and press Enter, or tap any command in the list.\nExamples:\n/confetti\n/xp50\n/give @sam 50\n/dm @sam well done!\n/qotd What is 7x8? | 56\n/countdown Maths 2026-11-05\n\n"+CMDS.length+" commands in total."));
+C("help","How commands work",()=>alert("Press / or Ctrl+K anywhere, or tap the ⌨️ button, to search commands.\nOr type /name in the Admin Panel console.\nExamples:\n/confetti\n/xp50\n/give @sam 50\n/dm @sam well done!\n/qotd What is 7x8? | 56\n/countdown Maths 2026-11-05\n\n"+CMDS.length+" commands in total."));
 C("say","Custom announcement",a=>{setSite({msg:a.join(" ").slice(0,200)});toast("Posted.")},"text");
 C("countdown","Exam countdown",a=>{const d=a.pop();if(!/^\d{4}-\d{2}-\d{2}$/.test(d||""))return toast("Use /countdown Maths 2026-11-05");setSite({exam:{name:a.join(" ").slice(0,40),date:d}});toast("Countdown set.")},"name YYYY-MM-DD");
 C("qotd","Question of the day",a=>{const t=a.join(" ").split("|");if(t.length<2||!t[1].trim())return toast("Use /qotd question | answer");setSite({q:{id:String(Date.now()),q:t[0].trim().slice(0,200),a:t[1].trim().slice(0,60)}});toast("Question posted.")},"question | answer");
@@ -2042,15 +2042,66 @@ function runCmd(raw){
   if(!adminOnly())return;
   const p=String(raw||"").trim().replace(/^\//,"").split(/\s+/),n=(p.shift()||"").toLowerCase(),c=CMDS.find(x=>x.n===n);
   if(!c)return toast("Unknown command. Try /help");
+  addRecent("/"+n+(p.length?" "+p.join(" "):""));
   try{c.f(p)}catch(e){toast("Command failed: "+e.message)}
-  render();
+  if(view==="admin")render();
 }
 function cmdHTML(){
   return `<div class="card"><h3>⌨️ Command console</h3><p class="small">${CMDS.length} commands. Type one and press Enter, e.g. <b>/confetti</b>, <b>/xp50</b>, <b>/dm @sam hello</b>. Look, effect, XP and announcement commands reach everyone.</p>
-  <div class="row"><input id="cmdIn" placeholder="/help" autocapitalize="off" autocomplete="off" onkeydown="if(event.key==='Enter')runCmd(this.value)"><button class="btn" onclick="runCmd(document.getElementById('cmdIn').value)">Run</button></div>
+  <div class="row"><input id="cmdIn" placeholder="/help" autocapitalize="off" autocomplete="off" onkeydown="if(event.key==='Enter')runCmd(this.value)"><button class="btn" onclick="runCmd(document.getElementById('cmdIn').value)">Run</button></div>${recents().length?`<div class="chips" style="margin-top:10px">${recents().map((r,i)=>`<button class="chip" onclick="runCmd(recents()[${i}])">🕘 ${escapeHTML(r)}</button>`).join("")}</div>`:""}
   <details style="margin-top:12px"><summary><b>All ${CMDS.length} commands</b></summary>${CMDS.map(c=>`<div class="adm-row"><button class="btn secondary sm" onclick="${c.a?`var i=document.getElementById('cmdIn');i.value='/${c.n} ';i.focus()`:`runCmd('${c.n}')`}">/${c.n}</button><span class="small grow">${escapeHTML(c.d)}${c.a?" · "+escapeHTML(c.a):""}</span></div>`).join("")}</details></div>`;
 }
-applyFlags();setTimeout(applyFlags,600);
+/* ---- quick command palette: ⌨️ button on every page, "/" or Ctrl+K ---- */
+const RK="gradeo_recent_cmds";
+function recents(){try{const v=JSON.parse(localStorage.getItem(RK)||"[]");return Array.isArray(v)?v.filter(x=>typeof x==="string").slice(0,8):[]}catch(e){return[]}}
+function addRecent(raw){raw=String(raw).trim().slice(0,200);if(!raw)return;try{localStorage.setItem(RK,JSON.stringify([raw].concat(recents().filter(x=>x!==raw)).slice(0,8)))}catch(e){}}
+let palSel=0,palCur=[];
+function palRows(){
+  const q=document.getElementById("palIn").value.trim().replace(/^\//,"").toLowerCase().split(/\s+/)[0];
+  if(!q)return recents().map(x=>({raw:x})).concat(CMDS.slice(0,40).map(c=>({c:c})));
+  return CMDS.filter(c=>c.n.includes(q)||c.d.toLowerCase().includes(q)).sort((a,b)=>(b.n.startsWith(q)-a.n.startsWith(q))||(a.n.length-b.n.length)).slice(0,40).map(c=>({c:c}));
+}
+function palDraw(){
+  palCur=palRows();
+  document.getElementById("palList").innerHTML=palCur.map((r,i)=>`<button class="palRow ${i===palSel?"sel":""}" onclick="palPickI(${i})">`+(r.raw?`<b>🕘 ${escapeHTML(r.raw)}</b>`:`<b>/${r.c.n}</b><span>${escapeHTML(r.c.d)}${r.c.a?" · "+escapeHTML(r.c.a):""}</span>`)+`</button>`).join("")||'<p class="small">No match.</p>';
+  const s=document.querySelector("#palList .sel");if(s&&s.scrollIntoView)s.scrollIntoView({block:"nearest"});
+}
+function palOpen(){if(!(currentUser&&isAdmin()))return;const i=document.getElementById("palIn");document.getElementById("pal").classList.add("on");i.value="";palSel=0;palDraw();setTimeout(()=>i.focus(),30)}
+function palClose(){document.getElementById("pal").classList.remove("on")}
+function palPick(r){
+  if(!r)return;const i=document.getElementById("palIn");
+  if(r.raw){palClose();runCmd(r.raw)}
+  else if(r.c.a){i.value="/"+r.c.n+" ";i.focus();palDraw()}
+  else{palClose();runCmd(r.c.n)}
+}
+function palPickI(i){palPick(palCur[i])}
+function palBtn(){const b=document.getElementById("palBtn");if(b)b.style.display=(currentUser&&isAdmin()&&!(view==="quiz"&&quiz))?"block":"none"}
+(function(){
+  const st=document.createElement("style");
+  st.textContent="#palBtn{position:fixed;right:16px;bottom:16px;z-index:9000;width:52px;height:52px;border-radius:50%;font-size:24px;background:var(--blue);color:#fff;border:2px solid var(--line);box-shadow:3px 3px 0 var(--sh)}#pal{position:fixed;inset:0;z-index:10000;background:#0008;display:none;align-items:flex-start;justify-content:center;padding:8vh 12px 0}#pal.on{display:flex}#palBox{background:var(--card);color:var(--ink);border:2px solid var(--line);border-radius:18px;box-shadow:6px 6px 0 var(--sh);width:100%;max-width:560px;max-height:80vh;display:flex;flex-direction:column;padding:14px}#palList{overflow:auto;margin-top:10px}.palRow{display:flex;gap:10px;align-items:center;width:100%;text-align:left;padding:10px 12px;border-radius:12px;background:transparent;color:var(--ink)}.palRow.sel,.palRow:hover{background:var(--soft)}.palRow b{white-space:nowrap}.palRow span{font-size:13px;color:var(--muted)}";
+  document.head.appendChild(st);
+  const d=document.createElement("div");d.id="pal";
+  d.innerHTML='<div id="palBox"><input id="palIn" placeholder="Type a command (try: conf, xp, give)" autocomplete="off" autocapitalize="off"><div id="palList"></div></div>';
+  document.body.appendChild(d);
+  d.addEventListener("click",e=>{if(e.target===d)palClose()});
+  const b=document.createElement("button");b.id="palBtn";b.textContent="⌨️";b.setAttribute("aria-label","Open admin commands");b.onclick=palOpen;b.style.display="none";document.body.appendChild(b);
+  const inp=d.querySelector("#palIn");
+  inp.addEventListener("input",()=>{palSel=0;palDraw()});
+  inp.addEventListener("keydown",e=>{
+    if(e.key==="ArrowDown"){e.preventDefault();palSel=Math.min(palSel+1,palCur.length-1);palDraw()}
+    else if(e.key==="ArrowUp"){e.preventDefault();palSel=Math.max(palSel-1,0);palDraw()}
+    else if(e.key==="Enter"){e.preventDefault();const v=inp.value.trim();palPick(v.includes(" ")?{raw:v}:palCur[palSel])}
+    else if(e.key==="Escape")palClose();
+  });
+  document.addEventListener("keydown",e=>{
+    if(!(currentUser&&isAdmin()))return;
+    const typing=/INPUT|TEXTAREA|SELECT/.test((document.activeElement||{}).tagName||"");
+    if((e.key==="k"&&(e.ctrlKey||e.metaKey))||(e.key==="/"&&!typing)){e.preventDefault();palOpen()}
+    else if(e.key==="Escape")palClose();
+  });
+  setInterval(palBtn,1500);
+})();
+applyFlags();setTimeout(applyFlags,600);palBtn();
 </script>
 </body>
 </html>
