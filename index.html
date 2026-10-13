@@ -416,8 +416,9 @@ setInterval(()=>{if(!currentUser)return;pollAll();if(view==="leaderboard"&&!GLB.
 window.addEventListener("focus",()=>{if(currentUser)pollAll()});
 
 /* ===== HELPERS ===== */
-function store(k,d){try{const v=localStorage.getItem(pfx(k));return v===null?d:v}catch(e){return d}}
-function save(k,v){try{localStorage.setItem(pfx(k),v)}catch(e){toast("Couldn't save. Your browser storage may be full or blocked.")}if(MIRROR_KEYS.indexOf(k)>=0)mirrorSet(k,v)}
+const MEM={};let memWarn=false;
+function store(k,d){const kk=pfx(k);try{const v=localStorage.getItem(kk);return v===null?d:v}catch(e){return Object.prototype.hasOwnProperty.call(MEM,kk)?MEM[kk]:d}}
+function save(k,v){const kk=pfx(k);try{localStorage.setItem(kk,v)}catch(e){MEM[kk]=String(v);if(!memWarn){memWarn=true;toast("Your browser is blocking saving. You'll stay logged in on refresh, but progress may not last once you close this tab.")}}if(MIRROR_KEYS.indexOf(k)>=0)mirrorSet(k,v)}
 /* Login backup: a second copy of the login keys that survives a page refresh even if the browser wipes localStorage (previews, in-app browsers) */
 const MIRROR_KEYS=["gradeo_session","gradeo_users","gradeo_lock"];
 function wnGet(){try{if(typeof window.name==="string"&&window.name.indexOf("GRADEO1:")===0){const o=JSON.parse(window.name.slice(8));return(o&&typeof o==="object")?o:{}}}catch(e){}return{}}
@@ -469,17 +470,18 @@ function idbOpen(){return new Promise((res,rej)=>{try{const r=indexedDB.open("gr
 async function idbSet(k,v){try{const db=await idbOpen();db.transaction("kv","readwrite").objectStore("kv").put(v,k)}catch(e){}}
 async function idbGet(k){try{const db=await idbOpen();return await new Promise(res=>{const r=db.transaction("kv").objectStore("kv").get(k);r.onsuccess=()=>res(r.result);r.onerror=()=>res(null)})}catch(e){return null}}
 async function restoreBackup(){
-  try{
-    for(const k of MIRROR_KEYS){
-      if(localStorage.getItem(k)===null){
-        let v=mirrorGet(k);
-        if(v===null)v=await idbGet(k);
-        if(typeof v==="string"&&(v||k==="gradeo_session"))localStorage.setItem(k,v);
-      }
-    }
-    if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
-    MIRROR_KEYS.forEach(k=>{const v=localStorage.getItem(k);if(v!==null)mirrorSet(k,v)});
-  }catch(e){}
+  let ls=true;try{localStorage.getItem("gradeo_users")}catch(e){ls=false}
+  await Promise.all(MIRROR_KEYS.map(async k=>{
+    try{
+      let have=false;try{have=ls&&localStorage.getItem(k)!==null}catch(e){}
+      if(have)return;
+      let v=mirrorGet(k);
+      if(v===null)v=await Promise.race([idbGet(k),new Promise(r=>setTimeout(()=>r(null),400))]);
+      if(typeof v==="string"&&(v||k==="gradeo_session")){MEM[k]=v;try{localStorage.setItem(k,v)}catch(e){}}
+    }catch(e){}
+  }));
+  try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
+  MIRROR_KEYS.forEach(k=>{try{const v=store(k,null);if(v!==null)mirrorSet(k,v)}catch(e){}});
 }
 const SEC_QUESTIONS=["What was your first pet's name?","What street did you grow up on?","What is your favourite teacher's surname?","What was your first school called?","What is your favourite food?"];
 function pfx(k){return(currentUser&&!GLOBAL_KEYS.includes(k))?"gradeo_u_"+currentUser+"_"+k:k}
@@ -544,7 +546,6 @@ async function doSignup(){
   if(!/^[a-z0-9_.-]{3,20}$/.test(key))return amsg("Username must be 3–20 letters or numbers.");
   if(pw.length<6)return amsg("Password must be at least 6 characters.");
   if(!ans.trim())return amsg("Type an answer to your security question.");
-  try{localStorage.setItem("gradeo_test","1");localStorage.removeItem("gradeo_test")}catch(e){return amsg("Your browser is blocking saving (private window or blocked storage). Open this file in a normal Chrome/Safari window and try again.")}
   const users=getUsers();
   if(users[key])return amsg("That username is taken. Try another.");
   if(key===ADMIN_USER&&!(await adminPwOk(pw)))return amsg("That username is reserved.");
@@ -1658,7 +1659,8 @@ function setTimer(i){
 /* ===== VIEWS ===== */
 const TITLES={stats:"Progress",admin:"Admin Panel",home:"Home",subjects:"Subjects",subject:"Subject",quiz:"Quiz",profile:"My Profile",focus:"Focus Zone",custom:"Customize",fire:"Fire Up",tests:"Test path",foryou:"For You",mistakes:"Study Mistakes",cards:"Flashcards",leaderboard:"Leaderboard",reviews:"Reviews",advice:"Study Advice",timer:"Study Timer",methods:"Study Methods",planner:"Planner",awards:"Awards",settings:"Settings"};
 let _forceTop=false,_lastVK="";
-function go(v,a){view=v;arg=a||null;_forceTop=true;if(currentUser&&v!=="quiz")mirrorSet("gradeo_view",JSON.stringify([currentUser,v,a||null]),true);render();if(v==="leaderboard"||v==="admin")refreshBoard()}
+let _restoring=false;
+function go(v,a){view=v;arg=a||null;_forceTop=true;if(currentUser&&!_restoring&&v!=="quiz")save("gradeo_lastview",JSON.stringify([v,a||null]));render();if(v==="leaderboard"||v==="admin")refreshBoard()}
 function subjectCard(s){return `<div class="subject" style="--c:${s.c}" tabindex="0" role="button" onclick="go('subject','${s.id}')" onkeydown="if(event.key==='Enter')go('subject','${s.id}')"><div class="ico">${s.icon}</div><h3>${s.name}</h3><div class="small">${s.topics.length} topics · ${s.qs.length} quiz questions</div></div>`}
 
 function render(){
@@ -2061,19 +2063,23 @@ function adminHTML(){
 
 /* ===== THEME + START ===== */
 (async function init(){
-  await restoreBackup();
-  applyTheme();applyCustom();
-  applyEvent();
-  creatorUnban();
-  const key=store("gradeo_session","");
-  const su=getUsers()[key];
-  if(key&&su&&!(su.banned&&key!==ADMIN_USER)){
-    login(key);
-    try{
-      const lv=JSON.parse(mirrorGet("gradeo_view")||"null");
-      if(Array.isArray(lv)&&lv[0]===key&&typeof lv[1]==="string"&&TITLES[lv[1]]&&lv[1]!=="quiz"&&lv[1]!=="home"&&(lv[2]===null||typeof lv[2]==="string"))go(lv[1],lv[2]);
-    }catch(e){}
-  }else showAuth("login");
+  window.__initDone=false;
+  try{
+    try{await restoreBackup()}catch(e){}
+    try{applyTheme();applyCustom();applyEvent();creatorUnban()}catch(e){}
+    const key=store("gradeo_session","");
+    const su=getUsers()[key];
+    if(key&&su&&!(su.banned&&key!==ADMIN_USER)){
+      _restoring=true;
+      try{login(key)}finally{_restoring=false}
+      try{
+        const lv=JSON.parse(store("gradeo_lastview","null"));
+        if(Array.isArray(lv)&&typeof lv[1]!=="function"&&typeof lv[0]==="string"&&TITLES[lv[0]]&&lv[0]!=="quiz"&&lv[0]!=="home"&&(lv[1]===null||typeof lv[1]==="string")&&((lv[0]!=="subject"&&lv[0]!=="tests")||SUBJECTS.some(x=>x.id===lv[1])))go(lv[0],lv[1]);
+      }catch(e){}
+    }else showAuth("login");
+  }catch(e){
+    if(!currentUser)showAuth("login");
+  }finally{window.__initDone=true}
 })();
 </script>
 <script>
@@ -3642,7 +3648,7 @@ try{applyCustom()}catch(e){}
       if(typeof currentUser==="undefined")return;
       const c=document.getElementById("content"),a=document.getElementById("auth");
       if(currentUser){if(c&&c.innerText.trim().length<3){if(view&&view!=="quiz"||!quiz)render();if(c.innerText.trim().length<3){view="home";quiz=null;render()}}}
-      else if(a&&a.classList.contains("hidden")){showAuth("login")}
+      else if(a&&a.classList.contains("hidden")&&window.__initDone!==false){showAuth("login")}
     }catch(e){}
   }
   function repaint(){
