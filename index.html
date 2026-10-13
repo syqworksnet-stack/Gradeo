@@ -3611,5 +3611,26 @@ const _pc5=pipCard;pipCard=function(){return seasonCard()+_pc5()};
 const _cu5=customHTML;customHTML=function(){return seasonCard()+_cu5()};
 try{applyCustom()}catch(e){}
 </script>
+<script>
+/* White-screen guard: if the page is ever blank (slow start, or the browser dropped the picture while the tab was in the background), draw it again by itself. */
+(function(){
+  function blank(){
+    try{
+      if(typeof currentUser==="undefined")return;
+      const c=document.getElementById("content"),a=document.getElementById("auth");
+      if(currentUser){if(c&&c.innerText.trim().length<3){if(view&&view!=="quiz"||!quiz)render();if(c.innerText.trim().length<3){view="home";quiz=null;render()}}}
+      else if(a&&a.classList.contains("hidden")){showAuth("login")}
+    }catch(e){}
+  }
+  function repaint(){
+    try{requestAnimationFrame(()=>{document.body.style.opacity="0.999";requestAnimationFrame(()=>{document.body.style.opacity=""})})}catch(e){}
+  }
+  function wake(){if(document.hidden)return;blank();repaint()}
+  [600,1500,3500,7000].forEach(t=>setTimeout(blank,t));
+  document.addEventListener("visibilitychange",wake);
+  window.addEventListener("pageshow",wake);
+  window.addEventListener("focus",wake);
+})();
+</script>
 </body>
 </html>
