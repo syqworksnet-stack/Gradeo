@@ -421,7 +421,7 @@ function save(k,v){try{localStorage.setItem(pfx(k),v)}catch(e){toast("Couldn't s
 function toast(t){
   let e=document.getElementById("toast");
   if(!e){e=document.createElement("div");e.id="toast";e.className="toast";document.body.appendChild(e)}
-  e.textContent=t;e.style.display="block";
+  e.textContent=t;e.style.display="block";e.style.cursor="pointer";e.onclick=()=>{e.style.display="none"};
   clearTimeout(e._t);e._t=setTimeout(()=>{e.style.display="none"},4000);
 }
 window.addEventListener("error",()=>toast("Something went wrong. Try again, or refresh the page."));
@@ -1822,13 +1822,14 @@ function burstFX(force){
   }
   clearTimeout(fx._t);fx._t=setTimeout(()=>{fx.innerHTML=""},7500);
 }
+function dismissMsg(){const m=site().msg||"";save("gradeo_bnx",m);updateBanner()}
 function updateBanner(){
   const el=document.getElementById("banner");if(!el)return;
   if(!currentUser||(view==="quiz"&&quiz)){el.innerHTML="";return}
   const s=site(),ev=EVENTS[evKey()];let h="";
   if(ev)h+=`<div class="bn ev">${ev.i} ${escapeHTML(ev.msg)}</div>`;
   if(s.boost>1)h+=`<div class="bn boost">⚡ ${s.boost}× XP is live! Every quiz and focus session earns more.</div>`;
-  if(s.msg)h+=`<div class="bn">📢 ${escapeHTML(s.msg)}</div>`;
+  if(s.msg&&store("gradeo_bnx","")!==s.msg)h+=`<div class="bn"><span style="flex:1">📢 ${escapeHTML(s.msg)}</span>${/refresh/i.test(s.msg)?`<button class="btn sm" onclick="location.reload()">Refresh now</button>`:""}<button class="btn secondary sm" aria-label="Dismiss" onclick="dismissMsg()">✕</button></div>`;
   if(s.exam&&s.exam.date){
     const d=Math.ceil((new Date(s.exam.date+"T00:00:00")-new Date().setHours(0,0,0,0))/864e5);
     if(!isNaN(d)&&d>=0)h+=`<div class="bn">⏳ ${escapeHTML(s.exam.name||"Exam")}: ${d===0?"today! Good luck!":d+" day"+(d===1?"":"s")+" to go"}</div>`;
